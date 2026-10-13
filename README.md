@@ -1,3 +1,5 @@
+> **Windows fork — Snapline:** This fork adds a native Rust / WinUI 3 Windows port of [Tendedero](https://github.com/alejandrobujan/tendedero). See [Windows build and usage instructions](docs/windows.md). Snapline uses its own name and icon and is not affiliated with or endorsed by the original author. The original macOS source and documentation are preserved below.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
   <img src="docs/images/hero-light.png" alt="Tendedero. Screenshots, hung out to dry. Three screenshots in glass frames hang from a thin line under the macOS menu bar.">
