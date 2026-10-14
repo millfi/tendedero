@@ -3,7 +3,6 @@
 [Tendedero](https://github.com/alejandrobujan/tendedero)を基にした、Rust / WinUI 3のスクリーンショット用の棚です。
 Windows版は [millfi/tendedero](https://github.com/millfi/tendedero) のフォークで開発しています。
 上流のコードのMITライセンスと著作権表示を保持し、名前とアイコンは独自のものにしています。
-元のSwiftコードは `Sources/Tendedero` に残しています。
 
 ## 起動とビルド
 

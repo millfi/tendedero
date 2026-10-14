@@ -14,6 +14,6 @@ try {
         ($_.PSIsContainer -and ($_.Name -match '^[a-z]{2,3}-' -or $_.Name -eq 'Microsoft.UI.Xaml'))
     } | ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $output -Recurse -Force }
     Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination $output
-    Copy-Item -LiteralPath (Join-Path $repo 'docs/windows.md') -Destination (Join-Path $output 'README.md')
+    Copy-Item -LiteralPath (Join-Path $repo 'README.ja.md') -Destination (Join-Path $output 'README.md')
     Write-Output (Join-Path $output 'snapline.exe')
 } finally { Pop-Location }
