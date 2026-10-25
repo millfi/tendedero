@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  MSIX package manifest for the framework-dependent build (Cargo feature "msix").
+  scripts/build-windows.ps1 fills in the {{...}} tokens and packs the layout.
+
+  * Dependencies/PackageDependency points at the Windows App Runtime 2 framework
+    package, so WinUI and the other runtime DLLs are installed once per machine and
+    shared with every other WinUI app. windows-reactor-setup stages the same runtime
+    as version 2.4.0 for the portable build; if that pin moves, the version here has
+    to move with it (see Architecture.md).
+  * uap10:TrustLevel="mediumIL" and uap10:RuntimeBehavior="packagedClassicApp" make the
+    package run as a full trust desktop app (the documented pair for WinUI 3 / Windows
+    App SDK apps). Without them the process starts in an app container, where
+    %LOCALAPPDATA% and Shell_NotifyIcon are denied and the shelf never comes up.
+    A full trust app is not file-system virtualized, so %LOCALAPPDATA%\Snapline stays
+    where it is and no unvirtualizedResources capability is needed. Turning TrustLevel
+    into appContainer would move new files into the package's LocalCache and require
+    that restricted capability to opt out again.
+-->
+<Package
+    xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+    xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+    xmlns:uap5="http://schemas.microsoft.com/appx/manifest/uap/windows10/5"
+    xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+    xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+    IgnorableNamespaces="uap uap5 uap10 rescap">
+
+  <Identity
+      Name="{{NAME}}"
+      Publisher="{{PUBLISHER}}"
+      Version="{{VERSION}}"
+      ProcessorArchitecture="{{ARCH}}" />
+
+  <Properties>
+    <DisplayName>Snapline</DisplayName>
+    <PublisherDisplayName>{{PUBLISHER_NAME}}</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily
+        Name="Windows.Desktop"
+        MinVersion="10.0.22000.0"
+        MaxVersionTested="10.0.26100.0" />
+    <PackageDependency
+        Name="Microsoft.WindowsAppRuntime.2"
+        MinVersion="2.4.0.0"
+        Publisher="CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="ja-JP" />
+    <Resource Language="en-US" />
+  </Resources>
+
+  <Applications>
+    <Application Id="Snapline" Executable="snapline.exe" EntryPoint="Windows.FullTrustApplication"
+        uap10:TrustLevel="mediumIL" uap10:RuntimeBehavior="packagedClassicApp">
+      <uap:VisualElements
+          DisplayName="Snapline"
+          Description="Screenshots hung on a clothesline"
+          BackgroundColor="transparent"
+          Square150x150Logo="Assets\Square150x150Logo.png"
+          Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+            ShortName="Snapline"
+            Square71x71Logo="Assets\Square71x71Logo.png" />
+      </uap:VisualElements>
+      <Extensions>
+        <!-- The alias puts snapline.exe on %PATH% (%LOCALAPPDATA%\Microsoft\WindowsApps)
+             so the data-dir and ui-test arguments documented in README.ja.md stay reachable. -->
+        <uap5:Extension
+            Category="windows.appExecutionAlias"
+            Executable="snapline.exe"
+            EntryPoint="Windows.FullTrustApplication">
+          <uap5:AppExecutionAlias>
+            <uap5:ExecutionAlias Alias="snapline.exe" />
+          </uap5:AppExecutionAlias>
+        </uap5:Extension>
+      </Extensions>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>
