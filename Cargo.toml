@@ -15,10 +15,20 @@ serde_json = "1"
 
 [dependencies.windows]
 version = "0.62"
-features = ["UI_Composition", "UI_Composition_Desktop", "Graphics_DirectX", "System", "Win32_System_WinRT", "Win32_System_WinRT_Composition", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Foundation", "Win32_Security", "Media_Editing", "Media_Transcoding", "Media_MediaProperties", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_Storage_FileSystem", "Win32_System_Threading", "ApplicationModel_DataTransfer", "Storage", "Storage_Search", "Storage_Streams", "Foundation", "Foundation_Collections"]
+# Monitor capture and the D3D11 / WinRT interop used to read its frames.
+features = ["Graphics_Capture", "Graphics_DirectX_Direct3D11", "Win32_System_WinRT_Graphics_Capture", "Win32_System_WinRT_Direct3D11", "UI_Composition", "UI_Composition_Desktop", "Graphics_DirectX", "System", "Win32_System_WinRT", "Win32_System_WinRT_Composition", "Win32_Graphics_Direct2D", "Win32_Graphics_Direct2D_Common", "Win32_Graphics_DirectWrite", "Win32_Graphics_Direct3D", "Win32_Graphics_Direct3D11", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Foundation", "Win32_Security", "Media_Editing", "Media_Transcoding", "Media_MediaProperties", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_System_DataExchange", "Win32_System_Memory", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_Storage_FileSystem", "Win32_System_Threading", "ApplicationModel_DataTransfer", "Storage", "Storage_Search", "Storage_Streams", "Foundation", "Foundation_Collections"]
 
 [build-dependencies]
 windows-reactor-setup = "=0.100.0"
+# Only used to write the MSIX logo assets; the app already depends on `image`.
+png = "0.18"
+
+[features]
+# Framework-dependent build for MSIX packaging: the Windows App SDK runtime is
+# resolved from the Microsoft.WindowsAppRuntime.2 framework package instead of
+# being copied next to the executable. Such a build only runs with package
+# identity; see scripts/build-windows.ps1 and Architecture.md.
+msix = []
 
 [profile.release]
 lto = "thin"

@@ -5,6 +5,7 @@ mod clothesline;
 mod editor;
 mod model;
 mod platform;
+mod screen_capture;
 mod video;
 
 fn main() {
@@ -44,7 +45,7 @@ fn main() {
         show_error(&error.to_string());
     }
     unsafe {
-        windows::Win32::System::Ole::OleUninitialize();
+        let _ = windows::Win32::System::Ole::OleUninitialize();
     }
 }
 fn show_error(message: &str) {

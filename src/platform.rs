@@ -307,77 +307,7 @@ pub fn copy_image(owner: HWND, path: &Path) -> AppResult<()> {
 }
 
 pub fn capture_rect(rect: RECT) -> AppResult<image::DynamicImage> {
-    unsafe {
-        let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
-        if w <= 0 || h <= 0 || w > 16384 || h > 16384 || (w as u64 * h as u64) > 128 * 1024 * 1024 {
-            return Err("キャプチャ範囲が大きすぎます".into());
-        }
-        let screen = GetDC(None);
-        if screen.is_invalid() {
-            return Err("画面を取得できません".into());
-        }
-        let dc = CreateCompatibleDC(Some(screen));
-        let bmp = CreateCompatibleBitmap(screen, w, h);
-        if dc.is_invalid() || bmp.is_invalid() {
-            let _ = DeleteObject(bmp.into());
-            let _ = DeleteDC(dc);
-            ReleaseDC(None, screen);
-            return Err("キャプチャ用メモリを確保できません".into());
-        }
-        let old = SelectObject(dc, bmp.into());
-        let capture = BitBlt(
-            dc,
-            0,
-            0,
-            w,
-            h,
-            Some(screen),
-            rect.left,
-            rect.top,
-            SRCCOPY | CAPTUREBLT,
-        );
-        SelectObject(dc, old);
-        let mut info = BITMAPINFO {
-            bmiHeader: BITMAPINFOHEADER {
-                biSize: size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: w,
-                biHeight: -h,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let mut pixels = vec![0u8; w as usize * h as usize * 4];
-        let lines = if capture.is_ok() {
-            GetDIBits(
-                dc,
-                bmp,
-                0,
-                h as u32,
-                Some(pixels.as_mut_ptr().cast()),
-                &mut info,
-                DIB_RGB_COLORS,
-            )
-        } else {
-            0
-        };
-        let _ = DeleteObject(bmp.into());
-        let _ = DeleteDC(dc);
-        ReleaseDC(None, screen);
-        capture?;
-        if lines != h {
-            return Err("画面の読み取りに失敗しました".into());
-        }
-        for px in pixels.as_chunks_mut::<4>().0 {
-            px.swap(0, 2);
-            px[3] = 255;
-        }
-        Ok(image::DynamicImage::ImageRgba8(
-            image::RgbaImage::from_raw(w as u32, h as u32, pixels).ok_or("画像サイズが不正です")?,
-        ))
-    }
+    crate::screen_capture::capture_rect(rect)
 }
 pub fn monitor_rect(work: bool) -> RECT {
     monitor_rect_at(cursor(), work)
