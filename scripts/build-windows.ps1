@@ -51,9 +51,12 @@ param(
     [switch]$Register
 )
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'msix-registration.ps1')
 $repo = Split-Path -Parent $PSScriptRoot
 $target = if ($TargetDir) { $TargetDir } elseif ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { Join-Path $repo 'target' }
 $output = if ($OutputDir) { $OutputDir } else { Join-Path $repo 'build' }
+$target = [System.IO.Path]::GetFullPath($target)
+$output = [System.IO.Path]::GetFullPath($output)
 $release = Join-Path $target 'release'
 $layout = Join-Path $target 'msix-layout'
 $msix = Join-Path $output 'Snapline.msix'
@@ -140,7 +143,17 @@ $assets = Join-Path $release 'msix-assets'
 if (-not (Test-Path -LiteralPath $assets)) {
     throw "ロゴ素材がありません: $assets。--features msix でのビルドが必要です。"
 }
-if (Test-Path -LiteralPath $layout) { Remove-Item -LiteralPath $layout -Recurse -Force }
+$registeredLayout = $layout
+if ($Register) {
+    if ([System.IO.Path]::GetPathRoot($layout).TrimEnd('\') -ne [System.IO.Path]::GetPathRoot($env:SystemDrive + '\').TrimEnd('\')) {
+        $registeredLayout = Join-Path $env:LOCALAPPDATA 'Snapline-msix-layout'
+    }
+    # Do this before deleting either staging location. An existing registration
+    # can reference $layout itself when the checkout is on the system drive.
+    Initialize-DevelopmentRegistration -PackageName $PackageName -LayoutPaths @($layout, $registeredLayout)
+}
+
+Remove-StagingLayout -Path $layout -ParentPath $target -DirectoryName 'msix-layout'
 New-Item -ItemType Directory -Force -Path (Join-Path $layout 'Assets') | Out-Null
 # Only the application binary and its assets: the runtime comes from the framework package.
 Copy-Item -LiteralPath (Join-Path $release 'snapline.exe') -Destination $layout
@@ -183,14 +196,10 @@ if ($Register) {
     # packaged build can be exercised without a signing certificate. Windows refuses the
     # notification area icon for packages registered from a non-system drive, so stage a
     # copy on the system drive first; ordinary installs land in WindowsApps anyway.
-    $registeredLayout = $layout
-    if ([System.IO.Path]::GetPathRoot($layout).TrimEnd('\') -ne [System.IO.Path]::GetPathRoot($env:SystemDrive + '\').TrimEnd('\')) {
-        $registeredLayout = Join-Path $env:LOCALAPPDATA 'Snapline-msix-layout'
-        if (Test-Path -LiteralPath $registeredLayout) { Remove-Item -LiteralPath $registeredLayout -Recurse -Force }
+    if ($registeredLayout -ne $layout) {
+        Remove-StagingLayout -Path $registeredLayout -ParentPath $env:LOCALAPPDATA -DirectoryName 'Snapline-msix-layout'
         Copy-Item -LiteralPath $layout -Destination $registeredLayout -Recurse
     }
-    # Re-registering the same version is blocked, so drop the previous registration.
-    Get-AppxPackage -Name $PackageName -ErrorAction SilentlyContinue | Remove-AppxPackage
     Add-AppxPackage -Register (Join-Path $registeredLayout 'AppxManifest.xml')
 }
 

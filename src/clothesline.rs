@@ -6,6 +6,7 @@ use crate::{
 };
 use image::{Rgba, RgbaImage};
 use std::{
+    cell::RefCell,
     collections::HashMap,
     mem::size_of,
     time::{Duration, Instant},
@@ -14,7 +15,7 @@ use windows::{
     Foundation::{Size, TimeSpan},
     Graphics::DirectX::*,
     System::DispatcherQueueController,
-    UI::Composition::{Desktop::DesktopWindowTarget, *},
+    UI::Composition::*,
     Win32::{
         Foundation::*,
         Graphics::{
@@ -23,7 +24,7 @@ use windows::{
             Direct3D11::*,
             DirectWrite::*,
             Dxgi::{Common::*, *},
-            Gdi::*,
+            Gdi::ScreenToClient,
         },
         System::{
             LibraryLoader::GetModuleHandleW,
@@ -84,7 +85,8 @@ pub struct Clothesline {
     compositor: Compositor,
     graphics: CompositionGraphicsDevice,
     root: ContainerVisual,
-    _target: DesktopWindowTarget,
+    source: CompositionVisualSurface,
+    regions: RefCell<crate::composition_regions::RegionWindows>,
     _queue: Option<DispatcherQueueController>,
     cache: HashMap<String, (String, SpriteVisual, SpriteVisual, SpriteVisual, f32, f32)>,
     signature: String,
@@ -166,6 +168,11 @@ impl Clothesline {
             let d2d = D2D1CreateDevice(&dxgi, None)?;
             let interop: ICompositorInterop = compositor.cast()?;
             let graphics = interop.CreateGraphicsDevice(&d2d)?;
+            let root = compositor.CreateContainerVisual()?;
+            let scene = compositor.CreateContainerVisual()?;
+            scene.Children()?.InsertAtTop(&root)?;
+            let source = compositor.CreateVisualSurface()?;
+            source.SetSourceVisual(&scene)?;
             let module = GetModuleHandleW(None)?;
             let class = w!("SnaplineTransparentClothesline");
             RegisterClassW(&WNDCLASSW {
@@ -176,7 +183,8 @@ impl Clothesline {
                 ..Default::default()
             });
             let hwnd = CreateWindowExW(
-                WS_EX_NOREDIRECTIONBITMAP
+                WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT
                     | WS_EX_TOPMOST
                     | if std::env::args().any(|a| a == "--ui-test") {
                         WS_EX_APPWINDOW
@@ -195,6 +203,12 @@ impl Clothesline {
                 Some(module.into()),
                 None,
             )?;
+            // This controller only supplies coordinates, timer and mouse
+            // capture. Separate Composition targets render the content.
+            if let Err(error) = SetLayeredWindowAttributes(hwnd, COLORREF(0), 0, LWA_ALPHA) {
+                let _ = DestroyWindow(hwnd);
+                return Err(error);
+            }
             let mut state = Box::new(State {
                 cards: vec![],
                 scale: 1.,
@@ -204,10 +218,6 @@ impl Clothesline {
                 copied: None,
             });
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, (&mut *state as *mut State) as isize);
-            let interop: ICompositorDesktopInterop = compositor.cast()?;
-            let target = interop.CreateDesktopWindowTarget(hwnd, true)?;
-            let root = compositor.CreateContainerVisual()?;
-            target.SetRoot(&root)?;
             SetTimer(Some(hwnd), 1, 30, None);
             Ok(Self {
                 hwnd,
@@ -215,7 +225,8 @@ impl Clothesline {
                 compositor,
                 graphics,
                 root,
-                _target: target,
+                source,
+                regions: RefCell::default(),
                 _queue: queue,
                 cache: HashMap::new(),
                 signature: String::new(),
@@ -241,28 +252,29 @@ impl Clothesline {
         self.hidden_at = None;
         if !self.shown {
             self.shown = true;
-            self.set_region(true);
-            self.region_at = Some(Instant::now() + Duration::from_millis(450));
             unsafe {
                 let _ = ShowWindow(self.hwnd, SW_SHOWNOACTIVATE);
             }
+            let _ = self.set_region(true);
+            self.region_at = Some(Instant::now() + Duration::from_millis(450));
             let _ = self.slide(-260., 0., 420);
         }
     }
     pub fn hide(&mut self) {
         if self.shown {
             self.shown = false;
-            self.set_region(true);
-            let _ = self.slide(0., -260., 220);
             self.hidden_at = Some(Instant::now() + Duration::from_millis(230));
+            let _ = self.set_region(true);
+            let _ = self.slide(0., -260., 220);
         }
     }
     pub fn tick(&mut self) {
         if self.region_at.is_some_and(|t| Instant::now() > t) {
-            self.set_region(false);
+            let _ = self.set_region(false);
             self.region_at = None;
         }
         if self.hidden_at.is_some_and(|t| Instant::now() > t) {
+            self.regions.borrow().hide();
             unsafe {
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
             }
@@ -442,50 +454,54 @@ impl Clothesline {
             self.root.Children()?.InsertAtTop(&hint)?;
         }
         self.signature = signature;
-        self.set_region(false);
+        self.set_region(false)?;
         Ok(())
     }
-    fn set_region(&self, swept: bool) {
+    fn set_region(&self, swept: bool) -> Result<()> {
         let scale = self.state.scale;
         let width = self.size.0 as f32 / scale;
-        // Restrict the native window region to painted content: the desktop and
-        // other applications remain clickable between/under the photographs.
-        unsafe {
-            let region = CreateRectRgn(0, 0, 0, 0);
-            for x in (0..self.size.0).step_by(8) {
-                let y = (rope_y(x as f32 / scale, width) * scale) as i32;
-                let r = CreateRectRgn(x, if swept { 0 } else { y - 3 }, x + 9, y + 5);
-                CombineRgn(Some(region), Some(region), Some(r), RGN_OR);
-                let _ = DeleteObject(r.into());
-            }
-            for c in &self.state.cards {
-                let r = CreateRectRgn(
-                    ((c.x - 8.) * scale) as i32,
-                    if swept {
-                        0
-                    } else {
-                        ((c.y - 14.) * scale) as i32
-                    },
-                    ((c.x + c.w + 8.) * scale) as i32,
-                    ((c.y + c.h + 8.) * scale) as i32,
-                );
-                CombineRgn(Some(region), Some(region), Some(r), RGN_OR);
-                let _ = DeleteObject(r.into());
-            }
-            if self.state.cards.is_empty() {
-                let r = CreateRectRgn(
-                    ((width - 350.) / 2. * scale) as i32,
-                    ((rope_y(width / 2., width) + 22.) * scale) as i32,
-                    ((width + 350.) / 2. * scale) as i32,
-                    ((rope_y(width / 2., width) + 54.) * scale) as i32,
-                );
-                CombineRgn(Some(region), Some(region), Some(r), RGN_OR);
-                let _ = DeleteObject(r.into());
-            }
-            if SetWindowRgn(self.hwnd, Some(region), true) == 0 {
-                let _ = DeleteObject(region.into());
-            }
+        let mut regions = Vec::new();
+        for x in (0..self.size.0).step_by(8) {
+            let y = (rope_y(x as f32 / scale, width) * scale) as i32;
+            regions.push(RECT {
+                left: x,
+                top: if swept { 0 } else { y - 3 },
+                right: x + 9,
+                bottom: y + 5,
+            });
         }
+        for c in &self.state.cards {
+            regions.push(RECT {
+                left: ((c.x - 8.) * scale) as i32,
+                top: if swept {
+                    0
+                } else {
+                    ((c.y - 14.) * scale) as i32
+                },
+                right: ((c.x + c.w + 8.) * scale) as i32,
+                bottom: ((c.y + c.h + 8.) * scale) as i32,
+            });
+        }
+        if self.state.cards.is_empty() {
+            regions.push(RECT {
+                left: ((width - 350.) / 2. * scale) as i32,
+                top: ((rope_y(width / 2., width) + 22.) * scale) as i32,
+                right: ((width + 350.) / 2. * scale) as i32,
+                bottom: ((rope_y(width / 2., width) + 54.) * scale) as i32,
+            });
+        }
+        self.source.SetSourceSize(Vector2 {
+            X: self.size.0 as f32,
+            Y: self.size.1 as f32,
+        })?;
+        self.regions.borrow_mut().update(
+            self.hwnd,
+            &self.compositor,
+            &self.source,
+            self.size,
+            &regions,
+            self.shown || self.hidden_at.is_some(),
+        )
     }
     pub(crate) fn sprite(
         &self,
@@ -604,6 +620,7 @@ impl Clothesline {
 }
 impl Drop for Clothesline {
     fn drop(&mut self) {
+        self.regions.borrow_mut().clear();
         unsafe {
             SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
             let _ = KillTimer(Some(self.hwnd), 1);
@@ -799,12 +816,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) ->
         }
         if msg == WM_ERASEBKGND {
             return LRESULT(1);
-        }
-        if msg == WM_PAINT {
-            let mut paint = PAINTSTRUCT::default();
-            BeginPaint(hwnd, &mut paint);
-            let _ = EndPaint(hwnd, &paint);
-            return LRESULT(0);
         }
         if msg == WM_MOUSEACTIVATE {
             return LRESULT(MA_NOACTIVATE as isize);

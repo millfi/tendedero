@@ -12,7 +12,9 @@ Windows 版の機能追加・修正に向けた構成案内。実装方針は [A
 | `src/main.rs` | エントリーポイント。保存先の決定、Store の読み込み確認、多重起動の抑止、ログと panic hook、OLE の初期化、Reactor の `Shelf` 起動。 |
 | `src/app.rs` | アプリ全体の状態と操作を管理する `Shelf` / `Message`。設定 UI、取り込み、ページ切り替え、監視、キャプチャ、飛来、編集画面への振り分けを担当する。 |
 | `src/model.rs` | `Settings`、`Item`、`Store`、`FolderWatcher`。設定・一覧の永続化、メディアのコピー、画像の重複判定、固定・取り外し・復元、監視対象ファイルの安定判定。 |
-| `src/platform.rs` | Windows との接続。`Host`、`NativeEvent`、通知領域とそのネイティブメニュー、写真の右クリックメニュー `item_menu`、ホットキー、タイマー、ダイアログ、クリップボード、OLE ドラッグ、外部アプリの起動（`open` / `edit`）、モニター情報、前面全画面の判定 `fullscreen_foreground`、キャプチャ、単一起動、ファイル置換、実行ファイルの隣のアイコン `icon_path`。`Host` が `Clothesline` を所有する。 |
+| `src/platform.rs` | Windows との接続。`Host`、`NativeEvent`、通知領域とメニュー表示要求、写真の右クリックメニュー `item_menu`、ホットキー、タイマー、ダイアログ、クリップボード、OLE ドラッグ、外部アプリの起動（`open` / `edit`）、モニター情報、前面全画面の判定 `fullscreen_foreground`、キャプチャ、単一起動、ファイル置換、実行ファイルの隣のアイコン `icon_path`。`Host` が `Clothesline` を所有する。 |
+| `src/tray_menu.rs` | 通知領域の WinUI `MenuFlyout`。専用の小さなホストウィンドウ、埋め込み XAML によるコンパクトな項目テンプレート、`DesktopAcrylicBackdrop`、イベント購読と解放を管理する。`app.rs::Shelf` が所有する。 |
+| `src/tray_menu/abi.rs` | トレイメニューが必要とする WinUI 3 の最小限の ABI 定義。XAML のロード、Window、MenuFlyout、イベント、HWND 接続を扱う。Reactor 内部の非公開バインディングとは Rust オブジェクトを交換しない。 |
 | `src/clothesline.rs` | 透明な棚ウィンドウと Composition の描画基盤。ロープ・写真・額縁・クリップ、レイアウトと DPI、揺れ・表示切り替え、入力判定。キャプチャ側に Compositor、画像描画、着地点 `Landing` を提供する。 |
 | `src/capture.rs` | `Selection` による固定画面上の矩形選択と切り出し、`Flight` による撮影位置から棚への飛来。オーバーレイのウィンドウと Visual を所有する。 |
 | `src/screen_capture.rs` | Windows.Graphics.Capture による一回の画面取得。MTA スレッドでモニターごとのフレームを Direct3D 11 で読み戻し、物理座標で RGBA 画像に合成する。`platform::capture_rect` から呼ばれる。 |
@@ -47,7 +49,7 @@ Windows 版の機能追加・修正に向けた構成案内。実装方針は [A
 
 ## 全体の構成と所有権
 
-`main.rs` が起動する Reactor のルート Component は `app.rs::Shelf`。この WinUI ウィンドウは設定画面であり、写真が並ぶ透明な棚は別ウィンドウである。XAML ファイルは使わず Rust で UI を組み立てる。
+`main.rs` が起動する Reactor のルート Component は `app.rs::Shelf`。この WinUI ウィンドウは設定画面であり、写真が並ぶ透明な棚は別ウィンドウである。独立した XAML ファイルは使わず Rust で UI を組み立てる。トレイメニューだけは `tray_menu.rs` 内の埋め込み XAML を WinUI の `XamlReader` でロードする。
 
 ```mermaid
 flowchart TD
@@ -58,6 +60,7 @@ flowchart TD
     Shelf --> Capture[capture.rs: Selection / Flight]
     Capture --> Line
     Shelf --> Editor[editor.rs / video.rs]
+    Shelf --> Tray[tray_menu.rs: TrayMenu]
     Host -. NativeEvent .-> Shelf
     Capture -. NativeEvent .-> Shelf
     Editor -. Imported .-> Shelf
@@ -66,6 +69,18 @@ flowchart TD
 実線は主な所有・利用関係、点線は通知を示す。`Shelf` は Store、監視状態、Host、選択中の Selection、飛来中の Flight を持つ。Host は設定 HWND と `RefCell<Clothesline>` を保持する。
 
 ネイティブ側の操作は `platform::emit(NativeEvent)` から登録済みコールバック、Reactor の `LocalSender`、`Message::Native` を経由して Shelf に戻る。UI 状態と Composition オブジェクトは UI スレッドで扱う。動画の処理は Reactor の `spawn_background` で実行し、結果のメッセージだけを UI に返す。動画処理用スレッドでは COM apartment の初期化・解放を行う。
+
+### 通知領域の WinUI メニュー
+
+`platform.rs::subclass` は通知領域の右クリックを物理画面座標付きの `NativeEvent::TrayMenu` として送る。`Shelf::update` が `TrayMenu` を遅延作成して表示する。ネイティブ通知のスタックで WinUI を呼び出さず、Reactor のコンテキストメニュー機能も経由しない。写真の `item_menu` は従来の Win32 メニューのままである。
+
+設定画面を非表示にした状態でも有効な XamlRoot を持てるよう、トレイメニューは専用の 1 物理ピクセルの枠なしツールウィンドウを所有する。表示位置を右クリック座標へ動かし、初回はルートの Loaded 後、以後は Activate 後に `MenuFlyout.ShowAt` を呼ぶ。`ShouldConstrainToRootBounds=False` によりメニューをホストの外へ表示し、画面端の配置は WinUI に任せる。HWND の取得、枠・タスクバー表示の調整、物理座標への配置と前面化には Win32 / COM interop が必要である。メニューの描画には GDI を使わない。
+
+WinRT のクラスを ABI に渡すときは、その引数型の既定インターフェイスのポインターが必要になる。同じ Grid でも `IUIElement` と `IFrameworkElement` のポインターは交換できない。`TrayMenu.root` は `IFrameworkElement` として保持し、`IFlyoutBase::show_at(&IFrameworkElement)` に渡す。`Window.Content` と `UIElement.ContextFlyout` には `cast`（QueryInterface）で取得した `IUIElement` を使う。ABI モジュールはこの境界を型付きメソッドで公開し、対応する生の vtable 呼び出しは非公開にしている。`ShowAt` の引数型は [WinUI API リファレンス](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.primitives.flyoutbase.showat) を参照する。
+
+背景は WinUI の `DesktopAcrylicBackdrop`。項目は元のネイティブメニューに近い幅 132 DIP、最小行高 19 DIP、文字 11 DIP、内側余白 10×1 DIP を使用する。項目テンプレートで標準の大きな余白への状態遷移を避け、ホバー・押下・無効状態の配色とキーボードフォーカスには WinUI の仕組みを使う。DIP は表示先の DPI に従う。透過効果の無効化など、OS の材質ポリシーにより背景が単色へフォールバックする場合がある。
+
+項目の Click は既存の Toggle / Capture / Settings / Exit を送る。Tick と表示要求以外の操作では `Shelf::update` が先にメニューを閉じる。開閉アニメーションを無効にし、撮影にメニューが残るのを避ける。Esc やメニュー外のクリックによる閉じ方は WinUI の light dismiss を使い、Closed でホストも隠す。終了・生成失敗時は購読を解除し、ホストを Close する。表示に失敗した場合は設定画面にエラーを表示する。
 
 完全な一方向のレイヤー構成ではない。`platform.rs` が棚を所有する一方、棚・キャプチャから platform のイベントや画面情報を利用する。また、`model.rs` は platform の既知フォルダー取得・ファイル置換に依存し、platform は model の共通結果型を利用する。分割や置き換えの際は両方向を確認する。
 

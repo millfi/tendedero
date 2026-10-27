@@ -16,7 +16,6 @@ use windows::{
     },
     Win32::{
         Foundation::*,
-        Graphics::Gdi::*,
         System::{LibraryLoader::GetModuleHandleW, WinRT::Composition::ICompositorDesktopInterop},
         UI::{
             Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
@@ -306,12 +305,6 @@ unsafe extern "system" fn capture_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARA
         }
         if msg == WM_ERASEBKGND {
             return LRESULT(1);
-        }
-        if msg == WM_PAINT {
-            let mut p = PAINTSTRUCT::default();
-            BeginPaint(hwnd, &mut p);
-            let _ = EndPaint(hwnd, &p);
-            return LRESULT(0);
         }
         if !matches!(
             msg,

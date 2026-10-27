@@ -2,10 +2,14 @@
 mod app;
 mod capture;
 mod clothesline;
+mod composition_regions;
 mod editor;
 mod model;
+mod pickers;
 mod platform;
 mod screen_capture;
+mod startup_error;
+mod tray_menu;
 mod video;
 
 fn main() {
@@ -45,16 +49,15 @@ fn main() {
         show_error(&error.to_string());
     }
     unsafe {
-        let _ = windows::Win32::System::Ole::OleUninitialize();
+        windows::Win32::System::Ole::OleUninitialize();
     }
 }
 fn show_error(message: &str) {
-    unsafe {
-        windows::Win32::UI::WindowsAndMessaging::MessageBoxW(
-            None,
-            windows::core::PCWSTR(platform::wide(message).as_ptr()),
-            windows::core::w!("Snapline"),
-            windows::Win32::UI::WindowsAndMessaging::MB_ICONERROR,
-        );
+    // If WinUI itself cannot initialize, preserve the error for diagnostics;
+    // no second UI technology is started as a fallback.
+    if let Err(error) =
+        windows_reactor::App::run_component::<startup_error::StartupError>(message.to_owned())
+    {
+        eprintln!("{message}\nWinUI: {error}");
     }
 }

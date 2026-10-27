@@ -33,6 +33,7 @@ pub enum Message {
     AutoHide(bool),
     Size(u32),
     Folder,
+    PickerFinished(Result<crate::pickers::Outcome, String>),
     RemoveFolder(usize),
     DataFolder,
     Page(i32),
@@ -53,8 +54,23 @@ pub struct Shelf {
     away_since: Option<Instant>,
     selection: Option<crate::capture::Selection>,
     flight: Option<crate::capture::Flight>,
+    tray_menu: Option<crate::tray_menu::TrayMenu>,
+    item_menu: Option<crate::tray_menu::TrayMenu>,
+    picker_pending: bool,
 }
 impl Shelf {
+    fn begin_picker(&mut self, request: crate::pickers::Request, cx: &ComponentContext<Self>) {
+        if self.picker_pending {
+            return;
+        }
+        match crate::pickers::start(self.hwnd(), request) {
+            Ok(pending) => {
+                self.picker_pending = true;
+                cx.spawn_background(move |_| Message::PickerFinished(pending.complete()));
+            }
+            Err(error) => self.status = format!("ファイル選択: {error}"),
+        }
+    }
     fn hwnd(&self) -> windows::Win32::Foundation::HWND {
         self.host.as_ref().map(|h| h.hwnd).unwrap_or_default()
     }
@@ -184,7 +200,7 @@ impl Shelf {
             self.flight.take();
             self.peek_until = now + Duration::from_secs(5);
         }
-        if self.capturing() {
+        if self.capturing() || self.picker_pending {
             return;
         }
         let seq = platform::clipboard_sequence();
@@ -224,6 +240,11 @@ impl Shelf {
                     self.reveal();
                 }
             }
+        }
+        if self.tray_menu.as_ref().is_some_and(|menu| menu.is_open())
+            || self.item_menu.as_ref().is_some_and(|menu| menu.is_open())
+        {
+            return;
         }
         let Some(h) = &self.host else {
             return;
@@ -290,11 +311,29 @@ impl Component for Shelf {
             away_since: None,
             selection: None,
             flight: None,
+            tray_menu: None,
+            item_menu: None,
+            picker_pending: false,
         };
         app.clamp_page();
         app
     }
     fn update(&mut self, m: Message, cx: &ComponentContext<Self>) {
+        if self.picker_pending
+            && matches!(
+                &m,
+                Message::Import
+                    | Message::Folder
+                    | Message::Save(_)
+                    | Message::Capture
+                    | Message::Snip
+                    | Message::Native(
+                        NativeEvent::Capture | NativeEvent::Toggle | NativeEvent::Settings
+                    )
+            )
+        {
+            return;
+        }
         if self.capturing()
             && !matches!(
                 &m,
@@ -307,6 +346,18 @@ impl Component for Shelf {
             )
         {
             return;
+        }
+        if !matches!(
+            &m,
+            Message::Native(NativeEvent::Tick | NativeEvent::TrayMenu(_))
+        ) && let Some(menu) = &self.tray_menu
+        {
+            menu.hide();
+        }
+        if !matches!(&m, Message::Native(NativeEvent::Tick))
+            && let Some(menu) = &self.item_menu
+        {
+            menu.hide();
         }
         match m {
             Message::Init => {
@@ -341,6 +392,39 @@ impl Component for Shelf {
                 }
             }
             Message::Native(NativeEvent::Tick) => self.tick(cx),
+            Message::Native(NativeEvent::TrayMenu(point)) => {
+                let result = (|| -> windows::core::Result<()> {
+                    if self.tray_menu.is_none() {
+                        self.tray_menu = Some(crate::tray_menu::TrayMenu::new()?);
+                    }
+                    self.tray_menu.as_ref().unwrap().show(point)
+                })();
+                if let Err(error) = result {
+                    self.tray_menu.take();
+                    self.status = format!("トレイメニューを表示できません: {error}");
+                    self.settings = true;
+                    self.reveal();
+                }
+            }
+            Message::Native(NativeEvent::TrayMenuError(error)) => {
+                self.tray_menu.take();
+                self.item_menu.take();
+                self.status = format!("トレイメニューを表示できません: {error}");
+                self.settings = true;
+                self.reveal();
+            }
+            Message::Native(NativeEvent::ItemAction(id, action)) => {
+                use crate::tray_menu::ItemAction;
+                self.item_menu.take();
+                cx.sender().send(match action {
+                    ItemAction::Copy => Message::Copy(id),
+                    ItemAction::Edit => Message::Edit(id),
+                    ItemAction::Open => Message::Open(id),
+                    ItemAction::Save => Message::Save(id),
+                    ItemAction::Pin => Message::Pin(id),
+                    ItemAction::Dismiss => Message::Dismiss(id),
+                });
+            }
             Message::Native(NativeEvent::Selected(rect)) => {
                 if let Some(selection) = self.selection.take() {
                     let result = selection.crop(rect);
@@ -428,16 +512,7 @@ impl Component for Shelf {
                 }
             }
             Message::Import => {
-                match platform::pick_files(self.hwnd(), false) {
-                    Ok(paths) => {
-                        self.settings = false;
-                        for p in paths {
-                            self.import(p)
-                        }
-                    }
-                    Err(e) => self.status = e.to_string(),
-                }
-                self.peek_until = Instant::now() + Duration::from_secs(5);
+                self.begin_picker(crate::pickers::Request::Import, cx);
             }
             Message::Imported(path) => self.import(path),
             Message::Copy(id) => {
@@ -496,11 +571,7 @@ impl Component for Shelf {
             }
             Message::Save(id) => {
                 if let Some(i) = self.store.items.iter().find(|i| i.id == id) {
-                    match platform::save_as(self.hwnd(), &i.path) {
-                        Ok(true) => self.status = "保存しました".into(),
-                        Ok(false) => (),
-                        Err(e) => self.status = e.to_string(),
-                    }
+                    self.begin_picker(crate::pickers::Request::Save(i.path.clone()), cx);
                 }
             }
             Message::Dismiss(id) => {
@@ -540,18 +611,35 @@ impl Component for Shelf {
                 self.persist();
                 self.reveal();
             }
-            Message::Folder => match platform::pick_files(self.hwnd(), true) {
-                Ok(paths) => {
-                    for path in paths {
-                        if !self.store.settings.folders.contains(&path) {
-                            self.store.settings.folders.push(path);
+            Message::Folder => self.begin_picker(crate::pickers::Request::Folder, cx),
+            Message::PickerFinished(result) => {
+                use crate::pickers::Outcome;
+                self.picker_pending = false;
+                self.peek_until = Instant::now() + Duration::from_secs(5);
+                match result {
+                    Ok(Outcome::Import(paths)) => {
+                        if !paths.is_empty() {
+                            self.settings = false;
+                        }
+                        for path in paths {
+                            self.import(path);
                         }
                     }
-                    self.watcher = FolderWatcher::new(&self.store.settings.folders);
-                    self.persist();
+                    Ok(Outcome::Folder(path)) => {
+                        let paths = path.into_iter();
+                        for path in paths {
+                            if !self.store.settings.folders.contains(&path) {
+                                self.store.settings.folders.push(path);
+                            }
+                        }
+                        self.watcher = FolderWatcher::new(&self.store.settings.folders);
+                        self.persist();
+                    }
+                    Ok(Outcome::Saved(true)) => self.status = "保存しました".into(),
+                    Ok(Outcome::Saved(false)) => (),
+                    Err(error) => self.status = format!("ファイル選択: {error}"),
                 }
-                Err(e) => self.status = e.to_string(),
-            },
+            }
             Message::RemoveFolder(i) => {
                 if i < self.store.settings.folders.len() {
                     self.store.settings.folders.remove(i);
@@ -571,17 +659,17 @@ impl Component for Shelf {
                     .iter()
                     .find(|i| i.id == id)
                     .is_some_and(|i| i.pinned);
-                if let Some(command) = platform::item_menu(self.hwnd(), pinned) {
-                    let action = match command {
-                        1 => Message::Copy(id),
-                        2 => Message::Edit(id),
-                        3 => Message::Open(id),
-                        4 => Message::Save(id),
-                        5 => Message::Pin(id),
-                        6 => Message::Dismiss(id),
-                        _ => return,
-                    };
-                    cx.sender().send(action);
+                self.item_menu.take();
+                match crate::tray_menu::TrayMenu::for_item(&id, pinned).and_then(|menu| {
+                    menu.show(platform::cursor())?;
+                    Ok(menu)
+                }) {
+                    Ok(menu) => self.item_menu = Some(menu),
+                    Err(error) => {
+                        self.status = format!("写真のメニューを表示できません: {error}");
+                        self.settings = true;
+                        self.reveal();
+                    }
                 }
                 self.peek_until = Instant::now() + Duration::from_secs(5);
             }
@@ -601,6 +689,8 @@ impl Component for Shelf {
                 self.persist();
                 self.selection.take();
                 self.flight.take();
+                self.tray_menu.take();
+                self.item_menu.take();
                 self.host.take();
                 let _ = cx.window().request_close();
             }

@@ -106,59 +106,6 @@ pub fn edit(path: &Path) -> AppResult<()> {
     }
     Ok(())
 }
-pub fn pick_files(owner: HWND, folder: bool) -> AppResult<Vec<PathBuf>> {
-    unsafe {
-        let dialog: IFileOpenDialog =
-            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
-        let flags = if folder {
-            FOS_PICKFOLDERS
-        } else {
-            FOS_ALLOWMULTISELECT
-        };
-        dialog.SetOptions(FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | flags)?;
-        if let Err(e) = dialog.Show(Some(owner)) {
-            if e.code() == HRESULT(0x800704c7u32 as i32) {
-                return Ok(vec![]);
-            }
-            return Err(e.into());
-        }
-        let items = dialog.GetResults()?;
-        let mut result = vec![];
-        for i in 0..items.GetCount()? {
-            let value = items.GetItemAt(i)?.GetDisplayName(SIGDN_FILESYSPATH)?;
-            result.push(PathBuf::from(value.to_string()?));
-            CoTaskMemFree(Some(value.0.cast()));
-        }
-        Ok(result)
-    }
-}
-pub fn save_as(owner: HWND, source: &Path) -> AppResult<bool> {
-    unsafe {
-        let dialog: IFileSaveDialog =
-            CoCreateInstance(&FileSaveDialog, None, CLSCTX_INPROC_SERVER)?;
-        dialog.SetOptions(FOS_FORCEFILESYSTEM | FOS_OVERWRITEPROMPT)?;
-        dialog.SetFileName(PCWSTR(
-            wide(source.file_name().unwrap_or_default()).as_ptr(),
-        ))?;
-        dialog.SetDefaultExtension(PCWSTR(
-            wide(source.extension().unwrap_or_default()).as_ptr(),
-        ))?;
-        if let Err(e) = dialog.Show(Some(owner)) {
-            if e.code() == HRESULT(0x800704c7u32 as i32) {
-                return Ok(false);
-            }
-            return Err(e.into());
-        }
-        let p = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
-        let path = PathBuf::from(p.to_string()?);
-        CoTaskMemFree(Some(p.0.cast()));
-        if path != source {
-            std::fs::copy(source, path)?;
-        }
-        Ok(true)
-    }
-}
-
 pub fn clipboard_sequence() -> u32 {
     unsafe { GetClipboardSequenceNumber() }
 }
@@ -385,6 +332,9 @@ pub enum NativeEvent {
     Settings,
     CloseSettings,
     Capture,
+    TrayMenu(POINT),
+    TrayMenuError(String),
+    ItemAction(String, crate::tray_menu::ItemAction),
     Exit,
 }
 type NativeCallback = Box<dyn Fn(NativeEvent)>;
@@ -431,33 +381,7 @@ unsafe extern "system" fn subclass(
             match l.0 as u32 & 0xffff {
                 WM_LBUTTONUP | NIN_SELECT => emit(NativeEvent::Toggle),
                 WM_RBUTTONUP | WM_CONTEXTMENU => {
-                    if let Ok(menu) = CreatePopupMenu() {
-                        let _ = AppendMenuW(menu, MF_STRING, 1, w!("棚を表示 / 隠す"));
-                        let _ = AppendMenuW(menu, MF_STRING, 2, w!("範囲を撮影"));
-                        let _ = AppendMenuW(menu, MF_STRING, 3, w!("設定"));
-                        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, None);
-                        let _ = AppendMenuW(menu, MF_STRING, 4, w!("Snaplineを終了"));
-                        let p = cursor();
-                        let _ = SetForegroundWindow(hwnd);
-                        let command = TrackPopupMenu(
-                            menu,
-                            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-                            p.x,
-                            p.y,
-                            None,
-                            hwnd,
-                            None,
-                        )
-                        .0;
-                        let _ = DestroyMenu(menu);
-                        match command {
-                            1 => emit(NativeEvent::Toggle),
-                            2 => emit(NativeEvent::Capture),
-                            3 => emit(NativeEvent::Settings),
-                            4 => emit(NativeEvent::Exit),
-                            _ => (),
-                        }
-                    }
+                    emit(NativeEvent::TrayMenu(cursor()));
                 }
                 _ => (),
             }
@@ -685,43 +609,5 @@ pub fn drag_file(path: &Path) -> AppResult<()> {
             return Err(windows::core::Error::from_hresult(hr).into());
         }
         Ok(())
-    }
-}
-
-/// Native popup avoids the preview Reactor runtime's nested context-flyout crash.
-pub fn item_menu(owner: HWND, pinned: bool) -> Option<u32> {
-    unsafe {
-        let menu = CreatePopupMenu().ok()?;
-        for (id, label) in [
-            (1, "コピー"),
-            (2, "マークアップ"),
-            (3, "既定のアプリで開く"),
-            (4, "名前を付けて保存…"),
-            (
-                5,
-                if pinned {
-                    "固定を解除"
-                } else {
-                    "棚に固定"
-                },
-            ),
-            (6, "棚から外す"),
-        ] {
-            let _ = AppendMenuW(menu, MF_STRING, id, PCWSTR(wide(label).as_ptr()));
-        }
-        let p = cursor();
-        let _ = SetForegroundWindow(owner);
-        let command = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_RIGHTBUTTON,
-            p.x,
-            p.y,
-            None,
-            owner,
-            None,
-        )
-        .0 as u32;
-        let _ = DestroyMenu(menu);
-        (command != 0).then_some(command)
     }
 }

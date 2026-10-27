@@ -8,6 +8,8 @@ license = "MIT"
 [dependencies]
 windows-reactor = "=0.100.0"
 windows-core = "0.62"
+windows-collections = "0.3"
+windows-future = "0.3"
 windows-numerics = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
 serde = { version = "1", features = ["derive"] }
