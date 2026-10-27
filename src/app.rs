@@ -184,7 +184,7 @@ impl Shelf {
         if let Some(h) = &self.host {
             h.line.borrow_mut().tick();
         }
-        if self.ticks == 5 && !self.capturing() {
+        if self.ticks == 5 && !self.capturing() && !self.picker_pending {
             self.reveal();
             let _ = std::fs::write(
                 self.store.root.join("startup.log"),
@@ -320,16 +320,12 @@ impl Component for Shelf {
     }
     fn update(&mut self, m: Message, cx: &ComponentContext<Self>) {
         if self.picker_pending
-            && matches!(
+            && !matches!(
                 &m,
-                Message::Import
-                    | Message::Folder
-                    | Message::Save(_)
-                    | Message::Capture
-                    | Message::Snip
-                    | Message::Native(
-                        NativeEvent::Capture | NativeEvent::Toggle | NativeEvent::Settings
-                    )
+                Message::Native(NativeEvent::Tick | NativeEvent::Exit)
+                    | Message::PickerFinished(_)
+                    | Message::Imported(_)
+                    | Message::Exit
             )
         {
             return;
@@ -625,16 +621,14 @@ impl Component for Shelf {
                             self.import(path);
                         }
                     }
-                    Ok(Outcome::Folder(path)) => {
-                        let paths = path.into_iter();
-                        for path in paths {
-                            if !self.store.settings.folders.contains(&path) {
-                                self.store.settings.folders.push(path);
-                            }
+                    Ok(Outcome::Folder(Some(path))) => {
+                        if !self.store.settings.folders.contains(&path) {
+                            self.store.settings.folders.push(path);
+                            self.watcher = FolderWatcher::new(&self.store.settings.folders);
+                            self.persist();
                         }
-                        self.watcher = FolderWatcher::new(&self.store.settings.folders);
-                        self.persist();
                     }
+                    Ok(Outcome::Folder(None)) => (),
                     Ok(Outcome::Saved(true)) => self.status = "保存しました".into(),
                     Ok(Outcome::Saved(false)) => (),
                     Err(error) => self.status = format!("ファイル選択: {error}"),

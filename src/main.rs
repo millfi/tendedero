@@ -59,5 +59,9 @@ fn show_error(message: &str) {
         windows_reactor::App::run_component::<startup_error::StartupError>(message.to_owned())
     {
         eprintln!("{message}\nWinUI: {error}");
+        let _ = std::fs::write(
+            std::env::temp_dir().join("Snapline-startup-error.log"),
+            format!("{message}\nWinUI: {error}"),
+        );
     }
 }

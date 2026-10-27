@@ -9,13 +9,17 @@ Windows 版の機能追加・修正に向けた構成案内。実装方針は [A
 
 | ファイル | 役割と主な関連先 |
 | --- | --- |
-| `src/main.rs` | エントリーポイント。保存先の決定、Store の読み込み確認、多重起動の抑止、ログと panic hook、OLE の初期化、Reactor の `Shelf` 起動。 |
+| `src/main.rs` | エントリーポイント。保存先の決定、Store の読み込み確認、多重起動の抑止、ログと panic hook、OLE の初期化、Reactor の `Shelf` 起動。起動失敗は `startup_error.rs` の WinUI ウィンドウへ渡す。 |
 | `src/app.rs` | アプリ全体の状態と操作を管理する `Shelf` / `Message`。設定 UI、取り込み、ページ切り替え、監視、キャプチャ、飛来、編集画面への振り分けを担当する。 |
 | `src/model.rs` | `Settings`、`Item`、`Store`、`FolderWatcher`。設定・一覧の永続化、メディアのコピー、画像の重複判定、固定・取り外し・復元、監視対象ファイルの安定判定。 |
-| `src/platform.rs` | Windows との接続。`Host`、`NativeEvent`、通知領域とメニュー表示要求、写真の右クリックメニュー `item_menu`、ホットキー、タイマー、ダイアログ、クリップボード、OLE ドラッグ、外部アプリの起動（`open` / `edit`）、モニター情報、前面全画面の判定 `fullscreen_foreground`、キャプチャ、単一起動、ファイル置換、実行ファイルの隣のアイコン `icon_path`。`Host` が `Clothesline` を所有する。 |
-| `src/tray_menu.rs` | 通知領域の WinUI `MenuFlyout`。専用の小さなホストウィンドウ、埋め込み XAML によるコンパクトな項目テンプレート、`DesktopAcrylicBackdrop`、イベント購読と解放を管理する。`app.rs::Shelf` が所有する。 |
+| `src/platform.rs` | Windows との接続。`Host`、`NativeEvent`、通知領域とメニュー表示要求、ホットキー、タイマー、クリップボード、OLE ドラッグ、外部アプリの起動（`open` / `edit`）、モニター情報、前面全画面の判定 `fullscreen_foreground`、キャプチャ、単一起動、ファイル置換、実行ファイルの隣のアイコン `icon_path`。`Host` が `Clothesline` を所有する。自前の Win32 メニューやファイルダイアログは持たない。 |
+| `src/tray_menu.rs` | 通知領域と写真の共通 WinUI `MenuFlyout`。専用の小さなホストウィンドウ、埋め込み XAML によるコンパクトな項目テンプレート、`DesktopAcrylicBackdrop`、イベント購読と解放を管理する。`app.rs::Shelf` が両メニューを所有する。 |
 | `src/tray_menu/abi.rs` | トレイメニューが必要とする WinUI 3 の最小限の ABI 定義。XAML のロード、Window、MenuFlyout、イベント、HWND 接続を扱う。Reactor 内部の非公開バインディングとは Rust オブジェクトを交換しない。 |
 | `src/clothesline.rs` | 透明な棚ウィンドウと Composition の描画基盤。ロープ・写真・額縁・クリップ、レイアウトと DPI、揺れ・表示切り替え、入力判定。キャプチャ側に Compositor、画像描画、着地点 `Landing` を提供する。 |
+| `src/composition_regions.rs` | 棚の描画範囲を重複しない矩形へ分割し、それぞれの `DesktopWindowTarget` に同じ `CompositionVisualSurface` を表示する。GDI 領域を使わず隙間への入力通過を保つ。入力を棚のコントローラーへ転送し、表示ホストを所有・破棄する。 |
+| `src/pickers.rs` | Windows App SDK Picker の起動と非同期結果。UI スレッドで開始し、バックグラウンドで結果を待ち、パス・キャンセル・保存結果を `app.rs` へ返す。 |
+| `src/pickers/abi.rs` | `Microsoft.Windows.Storage.Pickers` の最小限の ABI 定義。WindowId の取得、各 Picker の生成、拡張子と保存名の設定、型付き非同期操作を提供する。 |
+| `src/startup_error.rs` | 起動失敗を表示する WinUI ウィンドウ。ネイティブの MessageBox は使わない。WinUI 自体が初期化できない場合は `main.rs` が一時フォルダーにログを残す。 |
 | `src/capture.rs` | `Selection` による固定画面上の矩形選択と切り出し、`Flight` による撮影位置から棚への飛来。オーバーレイのウィンドウと Visual を所有する。 |
 | `src/screen_capture.rs` | Windows.Graphics.Capture による一回の画面取得。MTA スレッドでモニターごとのフレームを Direct3D 11 で読み戻し、物理座標で RGBA 画像に合成する。`platform::capture_rect` から呼ばれる。 |
 | `src/editor.rs` | WinUI の画像編集画面。ペン・四角・切り抜き・Undo と、`media/` 直下への `{一意な ID}-edited.png` の保存。`EditorInput` の保存通知を通じて `app.rs` に取り込みを依頼する。 |
@@ -25,6 +29,8 @@ Windows 版の機能追加・修正に向けた構成案内。実装方針は [A
 | `build.rs` | ビルドモデルの切り替え（自己完結 / `msix`）、Windows App Runtime の自己完結配置、独自アイコン `snapline.ico` と MSIX 用ロゴ PNG の生成。Cargo から自動実行される。 |
 | `scripts/run-windows.ps1` | 開発用。対象チェックアウトの実行プロセスを停止し、オフラインで Debug ビルドして起動する。`-Test` / `-SlowFlight` / `-TargetDir` を受け付ける。自己完結ビルドを使う。 |
 | `scripts/build-windows.ps1` | 配布用。`--features msix` の Release ビルドを `packaging/AppxManifest.xml` と組み合わせ、MSIX の作成・署名・動作確認用の登録まで行う。 |
+| `scripts/msix-registration.ps1` | 開発用登録の準備と配置フォルダー削除。対象 EXE のパスで絞ったプロセスの停止・終了待ち、既存登録の解除、削除先の絶対パス検証を行う。`build-windows.ps1` から読み込む。 |
+| `scripts/test-msix-registration.ps1` | 登録ヘルパーの回帰チェック。コマンドを置き換え、停止・待機・登録解除の順序、別チェックアウトを停止しないこと、終了失敗・削除先のガードを検証する。実プロセスや登録は変更しない。 |
 | `packaging/AppxManifest.xml` | MSIX のパッケージマニフェスト雛形。ビルドスクリプトがバージョン・発行元・アーキテクチャを差し替える。フレームワーク依存と仮想化の設定はここだけで決まる。 |
 | `README.ja.md` | Windows 版の利用方法、セットアップ、ビルド・配布、機能と制約、検証手順。 |
 | `Architecture.md` | ファイル一覧と、複数モジュールを横断する構造・処理・変更時の注意点。 |
@@ -49,7 +55,7 @@ Windows 版の機能追加・修正に向けた構成案内。実装方針は [A
 
 ## 全体の構成と所有権
 
-`main.rs` が起動する Reactor のルート Component は `app.rs::Shelf`。この WinUI ウィンドウは設定画面であり、写真が並ぶ透明な棚は別ウィンドウである。独立した XAML ファイルは使わず Rust で UI を組み立てる。トレイメニューだけは `tray_menu.rs` 内の埋め込み XAML を WinUI の `XamlReader` でロードする。
+`main.rs` が起動する Reactor のルート Component は `app.rs::Shelf`。この WinUI ウィンドウは設定画面であり、写真が並ぶ透明な棚は別の Composition ホスト群である。独立した XAML ファイルは使わず Rust で UI を組み立てる。通知領域と写真のメニューは `tray_menu.rs` 内の埋め込み XAML を WinUI の `XamlReader` でロードする。
 
 ```mermaid
 flowchart TD
@@ -57,6 +63,8 @@ flowchart TD
     Shelf --> Store[model.rs: Store / FolderWatcher]
     Shelf --> Host[platform.rs: Host]
     Host --> Line[clothesline.rs: Clothesline]
+    Line --> Regions[composition_regions.rs: RegionWindows]
+    Shelf --> Pickers[pickers.rs: Pending / Outcome]
     Shelf --> Capture[capture.rs: Selection / Flight]
     Capture --> Line
     Shelf --> Editor[editor.rs / video.rs]
@@ -72,13 +80,15 @@ flowchart TD
 
 ### 通知領域の WinUI メニュー
 
-`platform.rs::subclass` は通知領域の右クリックを物理画面座標付きの `NativeEvent::TrayMenu` として送る。`Shelf::update` が `TrayMenu` を遅延作成して表示する。ネイティブ通知のスタックで WinUI を呼び出さず、Reactor のコンテキストメニュー機能も経由しない。写真の `item_menu` は従来の Win32 メニューのままである。
+`platform.rs::subclass` は通知領域の右クリックを物理画面座標付きの `NativeEvent::TrayMenu` として送る。`Shelf::update` が `TrayMenu` を遅延作成して表示する。ネイティブ通知のスタックで WinUI を呼び出さず、Reactor のコンテキストメニュー機能も経由しない。写真の右クリックは `Message::Context(id)` から同じ基盤の `TrayMenu::for_item` を作り、Click の `NativeEvent::ItemAction(id, action)` を Copy / Edit / Open / Save / Pin / Dismiss に振り分ける。選択した写真の ID はコールバックに保持し、ページ移動や一覧変更で別の写真に操作が向かないようにする。
 
 設定画面を非表示にした状態でも有効な XamlRoot を持てるよう、トレイメニューは専用の 1 物理ピクセルの枠なしツールウィンドウを所有する。表示位置を右クリック座標へ動かし、初回はルートの Loaded 後、以後は Activate 後に `MenuFlyout.ShowAt` を呼ぶ。`ShouldConstrainToRootBounds=False` によりメニューをホストの外へ表示し、画面端の配置は WinUI に任せる。HWND の取得、枠・タスクバー表示の調整、物理座標への配置と前面化には Win32 / COM interop が必要である。メニューの描画には GDI を使わない。
 
 WinRT のクラスを ABI に渡すときは、その引数型の既定インターフェイスのポインターが必要になる。同じ Grid でも `IUIElement` と `IFrameworkElement` のポインターは交換できない。`TrayMenu.root` は `IFrameworkElement` として保持し、`IFlyoutBase::show_at(&IFrameworkElement)` に渡す。`Window.Content` と `UIElement.ContextFlyout` には `cast`（QueryInterface）で取得した `IUIElement` を使う。ABI モジュールはこの境界を型付きメソッドで公開し、対応する生の vtable 呼び出しは非公開にしている。`ShowAt` の引数型は [WinUI API リファレンス](https://learn.microsoft.com/en-us/windows/windows-app-sdk/api/winrt/microsoft.ui.xaml.controls.primitives.flyoutbase.showat) を参照する。
 
 背景は WinUI の `DesktopAcrylicBackdrop`。項目は元のネイティブメニューに近い幅 132 DIP、最小行高 19 DIP、文字 11 DIP、内側余白 10×1 DIP を使用する。項目テンプレートで標準の大きな余白への状態遷移を避け、ホバー・押下・無効状態の配色とキーボードフォーカスには WinUI の仕組みを使う。DIP は表示先の DPI に従う。透過効果の無効化など、OS の材質ポリシーにより背景が単色へフォールバックする場合がある。
+
+写真用メニューは長い項目名に合わせて幅 176 DIP、行高・材質はトレイと共通。メニュー表示中は棚の自動非表示を止め、操作を受け取ってから閉じる。
 
 項目の Click は既存の Toggle / Capture / Settings / Exit を送る。Tick と表示要求以外の操作では `Shelf::update` が先にメニューを閉じる。開閉アニメーションを無効にし、撮影にメニューが残るのを避ける。Esc やメニュー外のクリックによる閉じ方は WinUI の light dismiss を使い、Closed でホストも隠す。終了・生成失敗時は購読を解除し、ホストを Close する。表示に失敗した場合は設定画面にエラーを表示する。
 
@@ -127,9 +137,21 @@ WinRT の解放時に `GraphicsCapture.dll` が内部コールバックより先
 
 画像サーフェスは D3D11 → DXGI → Direct2D → Composition の interop で作成する。D3D11 はハードウェア初期化に失敗した場合 WARP を使う。文字は DirectWrite で描画する。`Clothesline::sprite` は CPU の RGBA 画像を乗算済みアルファの BGRA に変換してアップロードする。キャプチャ側の BGRA → RGBA 変換と合わせた既存の変換経路は維持している。
 
+棚はシーンのルートを `CompositionVisualSurface` のソースとして保持し、描画と入力が必要な範囲だけを `composition_regions.rs::RegionWindows` の矩形ホストへ表示する。`disjoint_rects` が範囲の和集合を重複のない矩形へ分割する。同じ半透明画素が複数のウィンドウに重なって濃くならないよう、各出力矩形は重ならない。隣接して高さが等しいロープの区間はまとめ、不要になったホストは破棄する。各ホストは同じシーンを物理座標のオフセット付きで表示するため、揺れ・表示切り替え・飛来からの透明度復元を複製せず共有する。
+
+従来の棚 HWND は透明度 0 の layered コントローラーで、`WS_EX_TRANSPARENT` により入力を背後へ通し、モニター座標・DPI・タイマー・マウスキャプチャを管理する。矩形ホストはコントローラーに所有され、マウス位置を物理クライアント座標へ変換して同じスレッドのウィンドウ手続きに転送する。描画範囲の隙間には入力を受けるホストがない。終了時は矩形ホストを先に破棄し、入力転送先が無効な HWND にならないようにする。これらはデスクトップの入力と Composition の接続に必要な Win32 境界であり、Win32 コントロールや GDI 描画は使わない。
+
 Direct2D の `BeginDraw` が返すオフセットは共有サーフェス内の位置を含むため、Clear と Draw の両方を更新範囲にクリップする必要がある。これを外すと別の写真の描画を壊し得る。額縁やクリップの形状を変更するときは、棚の `card_image` と飛来側の組み立て、`Landing` の寸法を揃える。
 
-透明な棚の写真間は、見た目だけでなくウィンドウ領域からも除外して背後にクリックを通す。表示・非表示アニメーション中には移動範囲を含めた領域を使うため、レイアウト変更は `set_region` とも対応させる。ウィンドウ手続きからの API 呼び出しは再入し得るので、ネイティブ状態への可変アクセスを持ったまま再入する処理にも注意する。
+表示・非表示アニメーション中には移動範囲を含めたホスト群を使うため、レイアウト変更は `set_region` とも対応させる。`WM_PAINT` の更新領域の検証は `DefWindowProc` に任せ、棚・撮影ウィンドウから `BeginPaint` / `EndPaint` を呼び出さない。ウィンドウ手続きからの API 呼び出しは再入し得るので、ネイティブ状態への可変アクセスを持ったまま再入する処理にも注意する。
+
+### ファイル選択・保存とエラー表示
+
+`Shelf::begin_picker` → `pickers::start` が UI スレッドで `Microsoft.Windows.Storage.Pickers` の FileOpenPicker / FolderPicker / FileSavePicker を生成し、`Pick*Async` を開始する。既存設定 HWND は `Microsoft.UI.Interop.h` と同じ FrameworkUdk の変換関数を介して WindowId に変換し、Picker に関連付ける。アプリ側に `IFileDialog` の COM 実装はない。表示されるファイルブラウザーは Windows App SDK が提供する OS 標準 UI であり、独自の XAML ファイルブラウザーではない。
+
+`Pending` を Reactor の `spawn_background` に渡し、MTA を初期化したスレッドでのみ待機・選択パス取得・保存コピーを行う。結果は `Message::PickerFinished` として戻る。待機中は UI スレッドを止めず、重複 Picker、撮影開始、棚の監視・自動表示切り替えを抑止する。キャンセルの S_OK + null と失敗 HRESULT を区別し、キャンセルで状態を変更しない。保存先が元ファイルと同じ場合はコピーを省略する。保存の上書き確認は FileSavePicker の既定動作を使う。
+
+起動失敗は `StartupError` の WinUI ウィンドウに表示する。WinUI 自体が起動できない場合は `%TEMP%/Snapline-startup-error.log` に内容を残し、Win32 MessageBox へは切り替えない。
 
 ## 取り込みと永続化
 
@@ -145,14 +167,13 @@ Direct2D の `BeginDraw` が返すオフセットは共有サーフェス内の�
 
 ## 既存の API 依存と移行時の注意
 
-**現状は GDI 非依存ではない。** `AGENTS.md` の方針に従い、下記を新機能の実装例として増やさない。
+アプリ側の GDI 描画・領域 API、Win32 メニュー・ファイルダイアログ・MessageBox の直接呼び出しはない。次の Win32 / COM 接続は残っている。
 
 | 現在の依存 | 関連箇所と影響範囲 |
 | --- | --- |
-| GDI のウィンドウ領域 | `clothesline.rs::set_region` の `CreateRectRgn` / `CombineRgn` など。見た目に加えて、背後へのクリック通過とアニメーション中の入力範囲を保持する必要がある。 |
-| ネイティブのペイント通知処理 | `capture.rs` / `clothesline.rs` の `BeginPaint` / `EndPaint`。実際の描画は Composition だが、GDI API の利用箇所として移行時に確認する。 |
 | Win32 / COM のホスト接続 | HWND、ウィンドウ手続き、DesktopWindowTarget、通知領域、ホットキー、OLE ドラッグなど。現行のネイティブホストを接続する境界。機能単位で WinRT による代替の可否を検討する。 |
-| Win32 / COM の補助処理 | クリップボード、ファイルダイアログ、既知フォルダー、ファイル置換など。現在の採用を将来の必須条件とせず、同じ要件を満たす WinRT 実装を優先する。 |
+| Win32 / COM の補助処理 | クリップボード、既知フォルダー、ファイル置換など。現在の採用を将来の必須条件とせず、同じ要件を満たす WinRT 実装を優先する。 |
+| Gdi 名前空間の非描画 API | モニター列挙・情報取得と座標変換（ScreenToClient / ClientToScreen）。これらは HWND・デスクトップとの接続に使う User32 API であり、DC・Bitmap・GDI 領域は作らない。このメタデータ依存のため Cargo の `Win32_Graphics_Gdi` feature は残る。 |
 
 Direct3D / Direct2D / DirectWrite の COM interop は GDI 描画とは別の技術である。API の所属名だけで一律に削除せず、WinRT で満たせる機能と、描画・ウィンドウの相互運用に必要な境界を区別する。
 
@@ -213,7 +234,11 @@ Windows はシステムドライブ以外に置いたパッケージからの通
 複製してから登録する。通常のインストールは `WindowsApps` に展開されるので影響しない。
 
 `-Register` は開発者モード専用の登録で、署名は要らない。同じバージョンの再登録はブロックされるため、
-スクリプトは登録前に既存の登録を削除する。署名済み MSIX を入れるには、自己署名なら証明書を端末の
+スクリプトは Release ビルド成功後、配置を作り直す前に `msix-registration.ps1::Initialize-DevelopmentRegistration` を呼ぶ。配置元・登録先・既存パッケージの InstallLocation にある `snapline.exe` とパスが一致する実行プロセスだけを停止し、終了を最大 10 秒待ってから既存登録を解除する。別のチェックアウトの同名プロセスは停止しない。続いて配置元を生成・パッケージ化し、必要ならシステムドライブへコピーして `Add-AppxPackage -Register` を実行する。登録された EXE を解除前に削除・置換しない順序になっている。
+
+配置フォルダーの削除には `Remove-StagingLayout` を使い、絶対パスが対象 TargetDir の `msix-layout` または LOCALAPPDATA の `Snapline-msix-layout` と一致し、指定した親の配下にあることを確認する。ジャンクションなどの reparse point は再帰削除しない。アプリの設定・メディアの保存先は対象に含まれない。
+
+署名済み MSIX を入れるには、自己署名なら証明書を端末の
 信頼済みストア（管理者権限）へ入れる必要がある。
 
 ## ビルドと検証の入口
@@ -225,6 +250,7 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo fmt --all -- --check
 .\scripts\build-windows.ps1            # build\Snapline.msix
 .\scripts\build-windows.ps1 -Register  # 展開済みレイアウトを開発者モードで登録
+.\scripts\test-msix-registration.ps1 # 実アプリを変更しない登録ヘルパーの回帰チェック
 ```
 
 Cargo だけで自己完結のビルド・起動ができる。`--features msix` はパッケージとして登録した状態でのみ起動する。
@@ -233,7 +259,7 @@ PowerShell スクリプトは再起動・検証引数・MSIX 作成の補助で�
 
 単体テストは Store・監視・画像編集の境界処理・矩形選択と負の画面座標などを扱う。動画の実機統合テストは素材が必要で通常は ignored。素材とコマンドは `README.ja.md` を参照する。
 
-UI を変更した場合は `scripts/run-windows.ps1 -Test` で独立した `test-data` 保存先を使って確認できる。`--ui-test` は棚と撮影オーバーレイだけを対象に、タスクバーへの表示とアクティブ化を許可する（設定ウィンドウは指定の有無にかかわらず通常のタスクバーウィンドウ）。`-SlowFlight` が渡す `--slow-flight` は `--ui-test` と併用したときだけ飛来を 10 倍の時間にする。性能の判断には Release を使う。異なる DPI の複数モニターでの実機確認は未実施であり、座標の単体テストを実機確認の代わりには扱わない。
+UI を変更した場合は `scripts/run-windows.ps1 -Test` で独立した `test-data` 保存先を使って確認できる。`--ui-test` は棚のコントローラーと撮影オーバーレイを対象に、タスクバーへの表示とアクティブ化を許可する（設定ウィンドウは指定の有無にかかわらず通常のタスクバーウィンドウ）。棚の画素は所有された矩形ホスト群にあるため、コントローラー単体の画面取得には棚が含まれない。棚の表示確認にはデスクトップ全体を見る。`-SlowFlight` が渡す `--slow-flight` は `--ui-test` と併用したときだけ飛来を 10 倍の時間にする。性能の判断には Release を使う。異なる DPI の複数モニターでの実機確認は未実施であり、座標の単体テストを実機確認の代わりには扱わない。
 
 配布形態（MSIX）も実機で確認する。`-Register` のあと `%LOCALAPPDATA%\Microsoft\WindowsApps\snapline.exe` を
 `--ui-test --data-dir <フォルダー>` 付きで起動し、設定画面と棚、通知領域アイコン、保存先が
